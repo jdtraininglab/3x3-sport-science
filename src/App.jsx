@@ -447,46 +447,79 @@ export default function App() {
                   try { rec[h] = val ? JSON.parse(val) : []; } catch(err) { rec[h] = []; }
                 } else if (['rhr', 'weightPre', 'weightPost', 'cnsPreVel', 'cnsPostVel', 'cnsPreHeight', 'cnsPostHeight', 'mechLoad', 'polarLoad', 'sessionAvgHr', 'sessionMaxHr', 'calories', 'accelDecel', 'steps', 'jumps', 'avgJumpHeight'].includes(h)) {
                   rec[h] = val && val !== '' ? parseFloat(val) : null;
+                } else if (h === 'date') {
+                  // 強制校正 Excel 可能竄改的日期格式，統一為 YYYY-MM-DD
+                  let dStr = String(val !== undefined ? val : '').trim();
+                  const dateMatch = dStr.match(/(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})/);
+                  const mdyMatch = dStr.match(/(\d{1,2})[-/.](\d{1,2})[-/.](\d{2,4})/);
+                  
+                  if (dateMatch) {
+                      rec[h] = `${dateMatch[1]}-${String(dateMatch[2]).padStart(2, '0')}-${String(dateMatch[3]).padStart(2, '0')}`;
+                  } else if (mdyMatch) {
+                      let year = mdyMatch[3];
+                      if (year.length === 2) year = '20' + year;
+                      rec[h] = `${year}-${String(mdyMatch[1]).padStart(2, '0')}-${String(mdyMatch[2]).padStart(2, '0')}`;
+                  } else {
+                      const dParsed = new Date(dStr);
+                      if (!isNaN(dParsed)) {
+                          rec[h] = `${dParsed.getFullYear()}-${String(dParsed.getMonth() + 1).padStart(2, '0')}-${String(dParsed.getDate()).padStart(2, '0')}`;
+                      } else {
+                          rec[h] = dStr;
+                      }
+                  }
                 } else {
                   rec[h] = val !== undefined ? String(val) : '';
                 }
               });
-              if (rec.id && rec.playerId) imported.push(rec);
+              
+              // 透過正確的日期與球員 ID 強制重組唯一 ID，避免重複覆蓋錯誤
+              if (rec.playerId && rec.date) {
+                  rec.id = `${rec.playerId}-${rec.date}`;
+                  imported.push(rec);
+              }
             }
             
             for (const rec of imported) await saveRecordToCloud(rec);
-            alert(`✅ Excel資料匯入成功！共匯入 ${imported.length} 筆`);
+            alert(`✅ 系統備份 Excel 還原成功！共匯入/更新 ${imported.length} 筆資料`);
           } catch (err) {
             console.error(err);
-            alert("❌ 匯入失敗，請確認是否為正常的 Excel 檔案！");
+            alert("❌ 匯入失敗，請確認 Excel 檔案格式");
           }
         };
         reader.readAsArrayBuffer(file);
     }
-    e.target.value = null;
   };
 
   const generateMockData = async () => {
-    if(!window.confirm('產生測試資料會寫入大量隨機紀錄，確定嗎？')) return;
-    let pList = players.length > 0 ? players : MOCK_PLAYERS;
-    let curD = new Date('2026-09-11');
-    let endD = new Date(viewDate);
-    while(curD <= endD) {
-        let dStr = curD.toISOString().split('T')[0];
-        pList.forEach(p => {
-           let rec = {
-              id: `${p.id}-${dStr}`, playerId: p.id, date: dStr,
-              rhr: 60 + Math.random()*15, weightPre: 65, weightPost: 64 + Math.random(),
-              cnsPreVel: 1.2 + Math.random()*0.2, cnsPostVel: 1.0 + Math.random()*0.3,
-              mechLoad: 200 + Math.random()*100, polarLoad: 150 + Math.random()*100,
-              sessionAvgHr: 140 + Math.random()*20, sessionMaxHr: 180 + Math.random()*10,
-              loads: [{ type: 'team', rpe: Math.floor(5 + Math.random()*4), duration: 120 }],
-              sleepSessions: [{id: 1, bedTime: '23:00', wakeTime: '07:00'}]
-           };
-           saveRecordToCloud(rec);
+    if (!window.confirm("確定要產生測試數據嗎？這將會覆蓋部分現有資料。")) return;
+    const mockRecords = [];
+    const baseDate = new Date(viewDate);
+    baseDate.setDate(baseDate.getDate() - 14);
+    
+    for (let i = 0; i < 15; i++) {
+      const dStr = baseDate.toISOString().split('T')[0];
+      for (const p of players) {
+        mockRecords.push({
+          id: `${p.id}-${dStr}`,
+          playerId: p.id,
+          date: dStr,
+          rhr: parseFloat((55 + Math.random() * 15).toFixed(1)),
+          weightPre: parseFloat((60 + Math.random() * 5).toFixed(1)),
+          weightPost: parseFloat((59 + Math.random() * 5).toFixed(1)),
+          cnsPreVel: parseFloat((1.0 + Math.random() * 0.2).toFixed(2)),
+          cnsPostVel: parseFloat((0.8 + Math.random() * 0.2).toFixed(2)),
+          cnsPreHeight: parseFloat((30 + Math.random() * 10).toFixed(1)),
+          cnsPostHeight: parseFloat((25 + Math.random() * 10).toFixed(1)),
+          mechLoad: parseFloat((200 + Math.random() * 100).toFixed(1)),
+          polarLoad: parseFloat((150 + Math.random() * 80).toFixed(1)),
+          loads: [{ type: 'team', rpe: Math.floor(5 + Math.random() * 4), duration: 120 }],
+          sleepSessions: [{ id: Date.now(), bedTime: '23:00', wakeTime: '07:00' }]
         });
-        curD.setDate(curD.getDate() + 1);
+      }
+      baseDate.setDate(baseDate.getDate() + 1);
     }
+    for (const rec of mockRecords) await saveRecordToCloud(rec);
+    alert("✅ 測試數據產生完畢！");
   };
 
   if (!currentUser) {
@@ -875,8 +908,8 @@ function CoachDashboard({ players, onAddPlayer, onUpdatePlayer, onDeletePlayer, 
         <div className="flex overflow-x-auto hide-scrollbar gap-2 w-full pb-1 -mx-1 px-1">
           <button onClick={onGenerateMock} className="shrink-0 flex items-center gap-1 px-3 py-2 bg-amber-50 border border-amber-200 text-amber-700 rounded-xl text-xs md:text-sm font-bold shadow-sm hover:bg-amber-100 active:scale-95 transition-transform"><Zap size={14} /> 產生測試數據</button>
           <button onClick={() => setShowPlayerManager(!showPlayerManager)} className={`shrink-0 flex items-center gap-1 px-3 py-2 border rounded-xl text-xs md:text-sm font-bold shadow-sm transition-colors active:scale-95 ${showPlayerManager ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'}`}><Users size={14} /> 球隊名冊</button>
-          <button onClick={onExport} className="shrink-0 flex items-center gap-1 px-3 py-2 bg-white border border-slate-200 text-slate-600 rounded-xl text-xs md:text-sm font-bold shadow-sm hover:bg-slate-50 active:scale-95 transition-transform"><Download size={14} /> 備份匯出</button>
-          <label className="shrink-0 flex items-center gap-1 px-3 py-2 bg-white border border-slate-200 text-slate-600 rounded-xl text-xs md:text-sm font-bold shadow-sm hover:bg-slate-50 cursor-pointer active:scale-95 transition-transform"><Upload size={14} /> 資料匯入<input type="file" accept=".xlsx,.xls,.csv,.json" onChange={onImport} className="hidden" /></label>
+          <button onClick={onExport} className="shrink-0 flex items-center gap-1 px-3 py-2 bg-white border border-slate-200 text-slate-600 rounded-xl text-xs md:text-sm font-bold shadow-sm hover:bg-slate-50 active:scale-95 transition-transform"><Download size={14} /> 系統備份匯出</button>
+          <label className="shrink-0 flex items-center gap-1 px-3 py-2 bg-white border border-slate-200 text-slate-600 rounded-xl text-xs md:text-sm font-bold shadow-sm hover:bg-slate-50 cursor-pointer active:scale-95 transition-transform"><Upload size={14} /> 系統備份還原<input type="file" accept=".xlsx,.xls,.csv,.json" onChange={onImport} className="hidden" /></label>
         </div>
       </div>
 
@@ -898,7 +931,7 @@ function CoachDashboard({ players, onAddPlayer, onUpdatePlayer, onDeletePlayer, 
         <TeamLoadTrendCharts players={players} records={records} viewDate={viewDate} />
 
         <div className="bg-indigo-50/50 rounded-[1.5rem] border border-indigo-100 p-4 md:p-6 space-y-4 shadow-sm">
-          <h3 className="font-black text-indigo-900 text-base md:text-lg flex items-center gap-2"><FileText size={18}/> 外部儀器數據匯入 (支援多日資料一次上傳)</h3>
+          <h3 className="font-black text-indigo-900 text-base md:text-lg flex items-center gap-2"><FileText size={18}/> 外部儀器數據匯入 (Polar / Catapult 等多日資料)</h3>
           <p className="text-[11px] md:text-xs text-indigo-700 font-bold leading-relaxed">
             上傳包含 <strong className="bg-indigo-100 px-1 rounded">背號/姓名</strong> 以及 <strong className="bg-indigo-100 px-1 rounded">日期</strong> 的 Excel / CSV 檔案。<br/>
             系統會自動辨識每筆資料的專屬日期並分配到對應的天數，<strong className="text-indigo-800">您只需把好幾天的資料整合成一個檔案，一次匯入即可全部歸檔！</strong>
@@ -1409,10 +1442,10 @@ function TeamRhrTrendChart({ players, records, viewDate, teamStats }) {
                 <>
                   {rhrStats.valid && rhrStats.sd > 0 && (
                     <>
-                      <ReferenceArea y2={rhrStats.mean - rhrStats.sd} fill="#cbd5e1" fillOpacity={0.4} label={{ value: '不想努力了 (< -1sd)', position: 'insideTopLeft', fill: '#475569', fontSize: 10, fontWeight: 'bold' }} />
-                      <ReferenceArea y1={rhrStats.mean - rhrStats.sd} y2={rhrStats.mean + rhrStats.sd} fill="#86efac" fillOpacity={0.25} label={{ value: '狀況良好 (±1sd)', position: 'insideTopLeft', fill: '#047857', fontSize: 10, fontWeight: 'bold' }} />
-                      <ReferenceArea y1={rhrStats.mean + rhrStats.sd} y2={rhrStats.mean + 2*rhrStats.sd} fill="#fdba74" fillOpacity={0.35} label={{ value: '輕度疲勞 (+1~+2sd)', position: 'insideTopLeft', fill: '#c2410c', fontSize: 10, fontWeight: 'bold' }} />
-                      <ReferenceArea y1={rhrStats.mean + 2*rhrStats.sd} fill="#fca5a5" fillOpacity={0.35} label={{ value: '嚴重疲勞 (> +2sd)', position: 'insideBottomLeft', fill: '#b91c1c', fontSize: 10, fontWeight: 'bold' }} />
+                      <ReferenceArea y1={0} y2={rhrStats.mean - rhrStats.sd} fill="#cbd5e1" fillOpacity={0.4} label={{ value: '不想努力了 (< -1sd)', position: 'insideTopLeft', fill: '#475569', fontSize: 10, fontWeight: 'bold' }} ifOverflow="hidden" />
+                      <ReferenceArea y1={rhrStats.mean - rhrStats.sd} y2={rhrStats.mean + rhrStats.sd} fill="#86efac" fillOpacity={0.25} label={{ value: '狀況良好 (+1sd ~ -1sd)', position: 'insideTopLeft', fill: '#047857', fontSize: 10, fontWeight: 'bold' }} ifOverflow="hidden" />
+                      <ReferenceArea y1={rhrStats.mean + rhrStats.sd} y2={rhrStats.mean + 2*rhrStats.sd} fill="#fdba74" fillOpacity={0.35} label={{ value: '輕度疲勞 (+1~+2sd)', position: 'insideTopLeft', fill: '#c2410c', fontSize: 10, fontWeight: 'bold' }} ifOverflow="hidden" />
+                      <ReferenceArea y1={rhrStats.mean + 2*rhrStats.sd} y2={300} fill="#fca5a5" fillOpacity={0.35} label={{ value: '嚴重疲勞 (> +2sd)', position: 'insideBottomLeft', fill: '#b91c1c', fontSize: 10, fontWeight: 'bold' }} ifOverflow="hidden" />
                       <ReferenceLine y={rhrStats.mean} stroke="#94a3b8" strokeDasharray="3 3" />
                     </>
                   )}
@@ -2686,10 +2719,10 @@ function PlayerDashboard({ player, players, records, viewDate, setViewDate, onSa
                         <Tooltip contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)', fontSize: '10px' }} />
                         {rhrStats.valid && rhrStats.sd > 0 && (
                           <>
-                            <ReferenceArea y2={rhrStats.mean - rhrStats.sd} fill="#cbd5e1" fillOpacity={0.4} label={{ value: '非常輕鬆 / 累到不想努力了 (< -1sd)', position: 'insideTopLeft', fill: '#475569', fontSize: 10, fontWeight: 'bold' }} />
-                            <ReferenceArea y1={rhrStats.mean - rhrStats.sd} y2={rhrStats.mean + rhrStats.sd} fill="#86efac" fillOpacity={0.25} label={{ value: '狀況良好 (+1sd ~ -1sd)', position: 'insideTopLeft', fill: '#047857', fontSize: 10, fontWeight: 'bold' }} />
-                            <ReferenceArea y1={rhrStats.mean + rhrStats.sd} y2={rhrStats.mean + 2*rhrStats.sd} fill="#fdba74" fillOpacity={0.35} label={{ value: '輕度疲勞 (+1~+2sd)', position: 'insideTopLeft', fill: '#c2410c', fontSize: 10, fontWeight: 'bold' }} />
-                            <ReferenceArea y1={rhrStats.mean + 2*rhrStats.sd} fill="#fca5a5" fillOpacity={0.35} label={{ value: '嚴重疲勞 (> +2sd)', position: 'insideBottomLeft', fill: '#b91c1c', fontSize: 10, fontWeight: 'bold' }} />
+                            <ReferenceArea y1={0} y2={rhrStats.mean - rhrStats.sd} fill="#cbd5e1" fillOpacity={0.4} label={{ value: '非常輕鬆 / 累到不想努力了 (< -1sd)', position: 'insideTopLeft', fill: '#475569', fontSize: 10, fontWeight: 'bold' }} ifOverflow="hidden" />
+                            <ReferenceArea y1={rhrStats.mean - rhrStats.sd} y2={rhrStats.mean + rhrStats.sd} fill="#86efac" fillOpacity={0.25} label={{ value: '狀況良好 (+1sd ~ -1sd)', position: 'insideTopLeft', fill: '#047857', fontSize: 10, fontWeight: 'bold' }} ifOverflow="hidden" />
+                            <ReferenceArea y1={rhrStats.mean + rhrStats.sd} y2={rhrStats.mean + 2*rhrStats.sd} fill="#fdba74" fillOpacity={0.35} label={{ value: '輕度疲勞 (+1~+2sd)', position: 'insideTopLeft', fill: '#c2410c', fontSize: 10, fontWeight: 'bold' }} ifOverflow="hidden" />
+                            <ReferenceArea y1={rhrStats.mean + 2*rhrStats.sd} y2={300} fill="#fca5a5" fillOpacity={0.35} label={{ value: '嚴重疲勞 (> +2sd)', position: 'insideBottomLeft', fill: '#b91c1c', fontSize: 10, fontWeight: 'bold' }} ifOverflow="hidden" />
                             <ReferenceLine y={rhrStats.mean} stroke="#94a3b8" strokeDasharray="3 3" />
                           </>
                         )}
